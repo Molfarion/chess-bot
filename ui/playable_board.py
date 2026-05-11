@@ -42,27 +42,27 @@ UNICODE_PIECES = {
 PIECE_IMAGES = {}
 
 def get_font(name, size, bold=False):
-    for font_option in [name, "dejavusans", "freesans", "segoeuisymbol", "arial", "courier"]:
+    for font_option in [name, "roboto", "sans-serif", "dejavusans", "freesans", "segoeuisymbol", "arial", "courier"]:
         try:
             return pygame.font.SysFont(font_option, size, bold=bold)
         except Exception:
             continue
     return pygame.font.Font(None, size)
 
-font_ui_large = get_font("sans-serif", 26)
-font_ui_medium = get_font("sans-serif", 17)
-font_ui_small = get_font("sans-serif", 13)
+font_ui_large = get_font("roboto", 26)
+font_ui_medium = get_font("roboto", 17)
+font_ui_small = get_font("roboto", 13)
 font_pieces = get_font("dejavusans", 38)
 
-font_hud_heading = get_font("sans-serif", 21, bold=True)
-font_hud_text = get_font("sans-serif", 16)
+font_hud_heading = get_font("roboto", 21, bold=True)
+font_hud_text = get_font("roboto", 16)
 
 def load_piece_images():
     """Loads piece images from assets/pieces directory and scales them."""
     global PIECE_IMAGES
     PIECE_IMAGES.clear()
     
-    assets_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "pieces")
+    assets_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "assets", "pieces")
     if not os.path.exists(assets_dir):
         return False
         
@@ -170,6 +170,104 @@ def get_square_from_coords(pos):
         return chess.square(col, 7 - row)
     return None
 
+def get_move_pairs(board):
+    """Reconstructs the move history as a list of (move_number, white_move, black_move) tuples."""
+    starting_fen = board.starting_fen if hasattr(board, 'starting_fen') else chess.STARTING_FEN
+    temp_board = chess.Board(starting_fen)
+    
+    # Capture initial move state before pushing stack moves
+    start_num = temp_board.fullmove_number
+    is_white_first = (temp_board.turn == chess.WHITE)
+    
+    move_notations = []
+    for move in board.move_stack:
+        move_notations.append(temp_board.san(move))
+        temp_board.push(move)
+        
+    pairs = []
+    remaining_notations = list(move_notations)
+    current_num = start_num
+    
+    if not is_white_first and remaining_notations:
+        pairs.append((current_num, "...", remaining_notations[0]))
+        remaining_notations = remaining_notations[1:]
+        current_num += 1
+        
+    for i in range(0, len(remaining_notations), 2):
+        w_move = remaining_notations[i]
+        b_move = remaining_notations[i+1] if i+1 < len(remaining_notations) else ""
+        pairs.append((current_num, w_move, b_move))
+        current_num += 1
+        
+    return pairs
+
+def draw_status_info(win, board, scroll_index):
+    """Draws a single status line and a scrollable recent move history on the right side."""
+    # 1. Determine status text
+    if board.is_checkmate():
+        status_text = "Checkmate"
+    elif board.is_stalemate():
+        status_text = "Stalemate"
+    elif board.is_insufficient_material():
+        status_text = "Draw (Insufficient Material)"
+    elif board.is_game_over():
+        status_text = "Draw"
+    elif board.is_check():
+        status_text = "Check"
+    else:
+        status_text = "White to move" if board.turn == chess.WHITE else "Black to move"
+        
+    # Render status
+    color_neutral = (180, 185, 195)
+    font_status = get_font("roboto", 24)
+    text_surf = font_status.render(status_text, True, color_neutral)
+    
+    # Position status line near top-right of the board
+    x_pos = 730
+    y_status = Y_OFFSET + 30
+    win.blit(text_surf, (x_pos, y_status))
+    
+    # 2. Get all move history pairs
+    pairs = get_move_pairs(board)
+    
+    # 3. Draw History Title
+    y_history_hdr = y_status + 65
+    hdr_surf = font_ui_small.render("HISTORY", True, COLOR_TEXT_MUTED)
+    win.blit(hdr_surf, (x_pos, y_history_hdr))
+    
+    # 4. Slice move list based on scroll_index
+    max_visible_rows = 20
+    visible_pairs = pairs[scroll_index : scroll_index + max_visible_rows]
+    
+    y_curr = y_history_hdr + 25
+    for i, (num, w, b) in enumerate(visible_pairs):
+        y_row = y_curr + i * 22
+        
+        num_str = f"{num}."
+        num_surf = font_hud_text.render(num_str, True, COLOR_TEXT_MUTED)
+        win.blit(num_surf, (x_pos, y_row))
+        
+        w_surf = font_hud_text.render(w, True, COLOR_TEXT_MAIN)
+        win.blit(w_surf, (x_pos + 50, y_row))
+        
+        if b:
+            b_surf = font_hud_text.render(b, True, COLOR_TEXT_MAIN)
+            win.blit(b_surf, (x_pos + 130, y_row))
+            
+    # 5. Draw sleek minimalist scrollbar if there are more moves than max_visible_rows
+    if len(pairs) > max_visible_rows:
+        track_y = y_history_hdr + 25
+        track_height = max_visible_rows * 22 - 4
+        
+        # Calculate scroll thumb position and size
+        thumb_height = max(30, int(track_height * (max_visible_rows / len(pairs))))
+        scrollable_range = len(pairs) - max_visible_rows
+        thumb_y = track_y + int((track_height - thumb_height) * (scroll_index / scrollable_range))
+        
+        # Draw track & thumb
+        pygame.draw.rect(win, (35, 36, 42), (x_pos + 200, track_y, 4, track_height), border_radius=2)
+        pygame.draw.rect(win, (100, 105, 115), (x_pos + 200, thumb_y, 4, thumb_height), border_radius=2)
+
 def main():
     screen = pygame.display.set_mode((WIDTH, HEIGHT))
     pygame.display.set_caption("Chess")
@@ -177,12 +275,33 @@ def main():
 
     load_piece_images()
 
-    board = chess.Board()
+    starting_fen = chess.STARTING_FEN
+    if len(sys.argv) > 1:
+        fen_candidate = sys.argv[1]
+        try:
+            chess.Board(fen_candidate)
+            starting_fen = fen_candidate
+        except ValueError:
+            print(f"Warning: Invalid FEN '{fen_candidate}', using default starting position.")
+
+    board = chess.Board(starting_fen)
+    board.starting_fen = starting_fen
     
     selected_square = None
 
+    # Scrolling state variables
+    scroll_index = 0
+    prev_move_count = 0
+
     run = True
     while run:
+
+        # Auto-scroll to the end of history if a new move has been played or game has been reset
+        curr_move_count = len(board.move_stack)
+        if curr_move_count != prev_move_count:
+            pairs = get_move_pairs(board)
+            scroll_index = max(0, len(pairs) - 20)
+            prev_move_count = curr_move_count
 
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
@@ -192,8 +311,21 @@ def main():
                 if event.key == pygame.K_ESCAPE:
                     run = False
                 elif event.key == pygame.K_r:
-                    board.reset()
+                    board.set_fen(board.starting_fen)
                     selected_square = None
+                elif event.key == pygame.K_f:
+                    fen = board.fen()
+                    print(f"Current FEN: {fen}")
+                elif event.key == pygame.K_UP:
+                    scroll_index = max(0, scroll_index - 1)
+                elif event.key == pygame.K_DOWN:
+                    pairs = get_move_pairs(board)
+                    scroll_index = min(max(0, len(pairs) - 20), scroll_index + 1)
+
+            elif event.type == pygame.MOUSEWHEEL:
+                # event.y is positive for scroll-up, negative for scroll-down
+                pairs = get_move_pairs(board)
+                scroll_index = max(0, min(max(0, len(pairs) - 20), scroll_index - event.y))
 
             elif event.type == pygame.MOUSEBUTTONDOWN:
                 if event.button == 1: 
@@ -211,23 +343,31 @@ def main():
                             
                             if move in board.legal_moves:
                                 board.push(move)
-                                last_move = move
                                 selected_square = None
                             elif chess.Move(selected_square, clicked_square, promotion=chess.QUEEN) in board.legal_moves:
                                 promotion_move = chess.Move(selected_square, clicked_square, promotion=chess.QUEEN)
                                 board.push(promotion_move)
-                                last_move = promotion_move
                                 selected_square = None
                             elif piece is not None and piece.color == board.turn:
                                 selected_square = clicked_square
                             else:
                                 selected_square = None
+                elif event.button == 4: # Mousewheel scroll up fallback
+                    scroll_index = max(0, scroll_index - 1)
+                elif event.button == 5: # Mousewheel scroll down fallback
+                    pairs = get_move_pairs(board)
+                    scroll_index = min(max(0, len(pairs) - 20), scroll_index + 1)
+
+        # Clamp scroll_index defensively to guarantee it is always in valid range
+        pairs = get_move_pairs(board)
+        scroll_index = max(0, min(scroll_index, len(pairs) - 20))
 
         screen.fill(COLOR_BACKGROUND)
         
         draw_board_squares(screen, board, selected_square)
         draw_legal_highlights(screen, board, selected_square)
         draw_pieces(screen, board)
+        draw_status_info(screen, board, scroll_index)
 
         pygame.display.update()
         clock.tick(60)
