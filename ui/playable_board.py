@@ -41,6 +41,16 @@ UNICODE_PIECES = {
 
 PIECE_IMAGES = {}
 
+PIECE_VALUES = {
+    chess.QUEEN: 9, chess.ROOK: 5,
+    chess.BISHOP: 3, chess.KNIGHT: 3, chess.PAWN: 1,
+}
+CAPTURE_ORDER = [chess.QUEEN, chess.ROOK, chess.BISHOP, chess.KNIGHT, chess.PAWN]
+UNICODE_GLYPHS = {
+    'P': '♙', 'N': '♘', 'B': '♗', 'R': '♖', 'Q': '♕', 'K': '♔',
+    'p': '♟', 'n': '♞', 'b': '♝', 'r': '♜', 'q': '♛', 'k': '♚',
+}
+
 def get_font(name, size, bold=False):
     for font_option in [name, "roboto", "sans-serif", "dejavusans", "freesans", "segoeuisymbol", "arial", "courier"]:
         try:
@@ -84,19 +94,7 @@ def draw_transparent_rect(surface, color, rect):
     temp_surf.fill(color)
     surface.blit(temp_surf, (rect[0], rect[1]))
 
-def draw_transparent_circle(surface, color, center, radius):
-    """Draws a translucent circle with an alpha channel."""
-    temp_surf = pygame.Surface((radius * 2, radius * 2), pygame.SRCALPHA)
-    pygame.draw.circle(temp_surf, color, (radius, radius), radius)
-    surface.blit(temp_surf, (center[0] - radius, center[1] - radius))
-
-def draw_transparent_circle_ring(surface, color, center, radius, width=6):
-    """Draws a translucent circular ring (unfilled) with an alpha channel."""
-    temp_surf = pygame.Surface((radius * 2, radius * 2), pygame.SRCALPHA)
-    pygame.draw.circle(temp_surf, color, (radius, radius), radius, width)
-    surface.blit(temp_surf, (center[0] - radius, center[1] - radius))
-
-def draw_board_squares(win, board, selected_square):
+def draw_board_squares(win, selected_square):
     """Draws the 8x8 squares, including selection borders and last-move highlights."""
 
     frame_color = (45, 45, 52)
@@ -140,7 +138,7 @@ def draw_legal_highlights(win, board, selected_square):
             draw_transparent_rect(win, HL_LEGAL_EMPTY, (x, y, SQUARE_SIZE, SQUARE_SIZE))
 
 def draw_pieces(win, board):
-    """Draws the pieces on the board using PNGs with a robust styled unicode fallback."""
+    """Draws the pieces on the board using PNGs."""
     for row in range(8):
         for col in range(8):
             square = chess.square(col, 7 - row)
@@ -175,7 +173,6 @@ def get_move_pairs(board):
     starting_fen = board.starting_fen if hasattr(board, 'starting_fen') else chess.STARTING_FEN
     temp_board = chess.Board(starting_fen)
     
-    # Capture initial move state before pushing stack moves
     start_num = temp_board.fullmove_number
     is_white_first = (temp_board.turn == chess.WHITE)
     
@@ -188,6 +185,7 @@ def get_move_pairs(board):
     remaining_notations = list(move_notations)
     current_num = start_num
     
+    # FEN loaded with black to move first
     if not is_white_first and remaining_notations:
         pairs.append((current_num, "...", remaining_notations[0]))
         remaining_notations = remaining_notations[1:]
@@ -201,11 +199,69 @@ def get_move_pairs(board):
         
     return pairs
 
+def get_captured_pieces(board):
+    """Return (white_lost, black_lost) dicts of {piece_type: count} taken from each side."""
+    starting_fen = board.starting_fen if hasattr(board, 'starting_fen') else chess.STARTING_FEN
+    start = chess.Board(starting_fen)
+
+    def counts(b):
+        c = {chess.WHITE: {}, chess.BLACK: {}}
+        for sq in chess.SQUARES:
+            p = b.piece_at(sq)
+            if p:
+                c[p.color][p.piece_type] = c[p.color].get(p.piece_type, 0) + 1
+        return c
+
+    s, cur = counts(start), counts(board)
+    white_lost, black_lost = {}, {}
+    for pt in chess.PIECE_TYPES:
+        dw = s[chess.WHITE].get(pt, 0) - cur[chess.WHITE].get(pt, 0)
+        db = s[chess.BLACK].get(pt, 0) - cur[chess.BLACK].get(pt, 0)
+        if dw > 0: white_lost[pt] = dw   
+        if db > 0: black_lost[pt] = db   
+    return white_lost, black_lost
+
+def draw_captured_pieces(win, board):
+    """
+    Above board: white pieces captured by black.
+    Below board: black pieces captured by white.
+    Amber +N badge shows material advantage for the leading side.
+    """
+    white_lost, black_lost = get_captured_pieces(board)
+
+    adv_white = sum(PIECE_VALUES.get(pt, 0) * n for pt, n in black_lost.items())
+    adv_black = sum(PIECE_VALUES.get(pt, 0) * n for pt, n in white_lost.items())
+
+    font_cap = get_font("dejavusans", 15)
+    font_adv = get_font("roboto", 13)
+
+    def render_row(losses, show_white_glyphs, y_pos, advantage):
+        x = X_OFFSET
+        for pt in CAPTURE_ORDER:
+            cnt = losses.get(pt, 0)
+            if cnt == 0:
+                continue
+            sym = chess.piece_symbol(pt)
+            key = sym.upper() if show_white_glyphs else sym
+            glyph = UNICODE_GLYPHS.get(key, "?")
+            color = (215, 215, 215) if show_white_glyphs else (90, 90, 90)
+            for _ in range(cnt):
+                s = font_cap.render(glyph, True, color)
+                win.blit(s, (x, y_pos))
+                x += 17
+        if advantage > 0:
+            adv_s = font_adv.render(f"+{advantage}", True, COLOR_TEXT_ACCENT)
+            win.blit(adv_s, (x + 4, y_pos + 1))
+
+    render_row(white_lost, show_white_glyphs=True,  y_pos=Y_OFFSET - 22, advantage=adv_black)
+    render_row(black_lost, show_white_glyphs=False, y_pos=Y_OFFSET + BOARD_SIZE + 6, advantage=adv_white)
+
+
 def draw_status_info(win, board, scroll_index):
     """Draws a single status line and a scrollable recent move history on the right side."""
-    # 1. Determine status text
     if board.is_checkmate():
-        status_text = "Checkmate"
+        winner = "Black" if board.turn == chess.WHITE else "White"
+        status_text = f"Checkmate — {winner} wins"
     elif board.is_stalemate():
         status_text = "Stalemate"
     elif board.is_insufficient_material():
@@ -217,25 +273,23 @@ def draw_status_info(win, board, scroll_index):
     else:
         status_text = "White to move" if board.turn == chess.WHITE else "Black to move"
         
-    # Render status
     color_neutral = (180, 185, 195)
     font_status = get_font("roboto", 24)
     text_surf = font_status.render(status_text, True, color_neutral)
     
-    # Position status line near top-right of the board
     x_pos = 730
     y_status = Y_OFFSET + 30
     win.blit(text_surf, (x_pos, y_status))
+    if board.is_game_over():
+        hint_surf = font_ui_small.render("Press R to restart", True, COLOR_TEXT_MUTED)
+        win.blit(hint_surf, (x_pos, y_status + 30))
     
-    # 2. Get all move history pairs
     pairs = get_move_pairs(board)
     
-    # 3. Draw History Title
     y_history_hdr = y_status + 65
     hdr_surf = font_ui_small.render("HISTORY", True, COLOR_TEXT_MUTED)
     win.blit(hdr_surf, (x_pos, y_history_hdr))
     
-    # 4. Slice move list based on scroll_index
     max_visible_rows = 20
     visible_pairs = pairs[scroll_index : scroll_index + max_visible_rows]
     
@@ -254,7 +308,6 @@ def draw_status_info(win, board, scroll_index):
             b_surf = font_hud_text.render(b, True, COLOR_TEXT_MAIN)
             win.blit(b_surf, (x_pos + 130, y_row))
             
-    # 5. Draw sleek minimalist scrollbar if there are more moves than max_visible_rows
     if len(pairs) > max_visible_rows:
         track_y = y_history_hdr + 25
         track_height = max_visible_rows * 22 - 4
@@ -289,14 +342,12 @@ def main():
     
     selected_square = None
 
-    # Scrolling state variables
     scroll_index = 0
     prev_move_count = 0
 
     run = True
     while run:
 
-        # Auto-scroll to the end of history if a new move has been played or game has been reset
         curr_move_count = len(board.move_stack)
         if curr_move_count != prev_move_count:
             pairs = get_move_pairs(board)
@@ -323,50 +374,52 @@ def main():
                     scroll_index = min(max(0, len(pairs) - 20), scroll_index + 1)
 
             elif event.type == pygame.MOUSEWHEEL:
-                # event.y is positive for scroll-up, negative for scroll-down
                 pairs = get_move_pairs(board)
                 scroll_index = max(0, min(max(0, len(pairs) - 20), scroll_index - event.y))
 
             elif event.type == pygame.MOUSEBUTTONDOWN:
                 if event.button == 1: 
-                    clicked_square = get_square_from_coords(event.pos)
-                    
-                    if clicked_square is not None:
-                        piece = board.piece_at(clicked_square)
-                        
-                        if selected_square is None:
-                            if piece is not None and piece.color == board.turn:
-                                selected_square = clicked_square
-                        
-                        else:
-                            move = chess.Move(selected_square, clicked_square)
-                            
-                            if move in board.legal_moves:
-                                board.push(move)
-                                selected_square = None
-                            elif chess.Move(selected_square, clicked_square, promotion=chess.QUEEN) in board.legal_moves:
-                                promotion_move = chess.Move(selected_square, clicked_square, promotion=chess.QUEEN)
-                                board.push(promotion_move)
-                                selected_square = None
-                            elif piece is not None and piece.color == board.turn:
-                                selected_square = clicked_square
-                            else:
-                                selected_square = None
-                elif event.button == 4: # Mousewheel scroll up fallback
+                    if board.is_game_over():
+                        pass  
+                    else:
+                     clicked_square = get_square_from_coords(event.pos)
+                     
+                     if clicked_square is not None:
+                         piece = board.piece_at(clicked_square)
+                         
+                         if selected_square is None:
+                             if piece is not None and piece.color == board.turn:
+                                 selected_square = clicked_square
+                         
+                         else:
+                             move = chess.Move(selected_square, clicked_square)
+                             
+                             if move in board.legal_moves:
+                                 board.push(move)
+                                 selected_square = None
+                             elif chess.Move(selected_square, clicked_square, promotion=chess.QUEEN) in board.legal_moves:
+                                 promotion_move = chess.Move(selected_square, clicked_square, promotion=chess.QUEEN)
+                                 board.push(promotion_move)
+                                 selected_square = None
+                             elif piece is not None and piece.color == board.turn:
+                                 selected_square = clicked_square
+                             else:
+                                 selected_square = None
+                elif event.button == 4:
                     scroll_index = max(0, scroll_index - 1)
-                elif event.button == 5: # Mousewheel scroll down fallback
+                elif event.button == 5: 
                     pairs = get_move_pairs(board)
                     scroll_index = min(max(0, len(pairs) - 20), scroll_index + 1)
 
-        # Clamp scroll_index defensively to guarantee it is always in valid range
         pairs = get_move_pairs(board)
         scroll_index = max(0, min(scroll_index, len(pairs) - 20))
 
         screen.fill(COLOR_BACKGROUND)
         
-        draw_board_squares(screen, board, selected_square)
+        draw_board_squares(screen, selected_square)
         draw_legal_highlights(screen, board, selected_square)
         draw_pieces(screen, board)
+        draw_captured_pieces(screen, board)
         draw_status_info(screen, board, scroll_index)
 
         pygame.display.update()
