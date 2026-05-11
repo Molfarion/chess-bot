@@ -2,6 +2,8 @@ import pygame
 import chess
 import sys
 import os
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from engine.engine import Agent
 
 pygame.init()
 pygame.font.init()
@@ -329,14 +331,8 @@ def main():
     load_piece_images()
 
     starting_fen = chess.STARTING_FEN
-    if len(sys.argv) > 1:
-        fen_candidate = sys.argv[1]
-        try:
-            chess.Board(fen_candidate)
-            starting_fen = fen_candidate
-        except ValueError:
-            print(f"Warning: Invalid FEN '{fen_candidate}', using default starting position.")
 
+    bot = Agent()
     board = chess.Board(starting_fen)
     board.starting_fen = starting_fen
     
@@ -353,6 +349,13 @@ def main():
             pairs = get_move_pairs(board)
             scroll_index = max(0, len(pairs) - 20)
             prev_move_count = curr_move_count
+
+        if not board.is_game_over() and board.turn == chess.BLACK:
+            pygame.time.delay(100)
+
+            bot_move = bot.find_move(board)
+            if bot_move:
+                board.push(bot_move)
 
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
