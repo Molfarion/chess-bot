@@ -63,7 +63,7 @@ def get_font(name, size, bold=False):
 
 font_ui_large = get_font("roboto", 26)
 font_ui_medium = get_font("roboto", 17)
-font_ui_small = get_font("roboto", 13)
+font_ui_small = get_font("roboto", 12)
 font_pieces = get_font("dejavusans", 38)
 
 font_hud_heading = get_font("roboto", 21, bold=True)
@@ -259,7 +259,7 @@ def draw_captured_pieces(win, board):
     render_row(black_lost, show_white_glyphs=False, y_pos=Y_OFFSET + BOARD_SIZE + 6, advantage=adv_white)
 
 
-def draw_status_info(win, board, scroll_index):
+def draw_status_info(win, board, scroll_index, bot=None, debug_mode=False, last_depth=3):
     """Draws a single status line and a scrollable recent move history on the right side."""
     if board.is_checkmate():
         winner = "Black" if board.turn == chess.WHITE else "White"
@@ -292,7 +292,7 @@ def draw_status_info(win, board, scroll_index):
     hdr_surf = font_ui_small.render("HISTORY", True, COLOR_TEXT_MUTED)
     win.blit(hdr_surf, (x_pos, y_history_hdr))
     
-    max_visible_rows = 20
+    max_visible_rows = 15  # Shrunk slightly from 20 to guarantee perfect layout spacing with Debug panel
     visible_pairs = pairs[scroll_index : scroll_index + max_visible_rows]
     
     y_curr = y_history_hdr + 25
@@ -323,6 +323,34 @@ def draw_status_info(win, board, scroll_index):
         pygame.draw.rect(win, (35, 36, 42), (x_pos + 200, track_y, 4, track_height), border_radius=2)
         pygame.draw.rect(win, (100, 105, 115), (x_pos + 200, thumb_y, 4, thumb_height), border_radius=2)
 
+    # Draw Debug Metrics Panel
+    if debug_mode and bot is not None:
+        # Draw a beautiful amber gold panel for Debug Info
+        debug_rect = (x_pos, Y_OFFSET + BOARD_SIZE - 95, 320, 95)
+        pygame.draw.rect(win, (35, 36, 42), debug_rect, border_radius=6)
+        pygame.draw.rect(win, COLOR_TEXT_ACCENT, debug_rect, 1, border_radius=6)
+        
+        # Title
+        title_surf = font_ui_small.render("DEBUG METRICS (Press D to disable)", True, COLOR_TEXT_ACCENT)
+        win.blit(title_surf, (x_pos + 12, Y_OFFSET + BOARD_SIZE - 87))
+        
+        # Stats
+        method_str = f"Search Method: {bot.method.upper()}"
+        depth_str = f"Search Depth: {last_depth}"
+        nodes_str = f"Moves Considered: {bot.nodes_searched:,}"
+        
+        method_surf = font_hud_text.render(method_str, True, COLOR_TEXT_MAIN)
+        depth_surf = font_hud_text.render(depth_str, True, COLOR_TEXT_MAIN)
+        nodes_surf = font_hud_text.render(nodes_str, True, COLOR_TEXT_MAIN)
+        
+        win.blit(method_surf, (x_pos + 12, Y_OFFSET + BOARD_SIZE - 68))
+        win.blit(depth_surf, (x_pos + 12, Y_OFFSET + BOARD_SIZE - 48))
+        win.blit(nodes_surf, (x_pos + 12, Y_OFFSET + BOARD_SIZE - 28))
+    else:
+        # If debug is off, show a small hint at the bottom
+        hint_surf = font_ui_small.render("Press D to enable Debug Metrics", True, COLOR_TEXT_MUTED)
+        win.blit(hint_surf, (x_pos, Y_OFFSET + BOARD_SIZE - 20))
+
 def main():
     screen = pygame.display.set_mode((WIDTH, HEIGHT))
     pygame.display.set_caption("Chess")
@@ -332,7 +360,7 @@ def main():
 
     starting_fen = chess.STARTING_FEN
 
-    bot = Agent()
+    bot = Agent(method="minimax_ab")
     board = chess.Board(starting_fen)
     board.starting_fen = starting_fen
     
@@ -340,6 +368,9 @@ def main():
 
     scroll_index = 0
     prev_move_count = 0
+    
+    debug_mode = True
+    last_depth = 3
 
     run = True
     while run:
@@ -373,6 +404,15 @@ def main():
                 elif event.key == pygame.K_f:
                     fen = board.fen()
                     print(f"Current FEN: {fen}")
+                elif event.key == pygame.K_d:
+                    debug_mode = not debug_mode
+                elif event.key == pygame.K_m:
+                    if bot.method == "minimax_ab":
+                        bot.method = "minimax"
+                    elif bot.method == "minimax":
+                        bot.method = "random"
+                    else:
+                        bot.method = "minimax_ab"
                 elif event.key == pygame.K_UP:
                     scroll_index = max(0, scroll_index - 1)
                 elif event.key == pygame.K_DOWN:
@@ -426,7 +466,7 @@ def main():
         draw_legal_highlights(screen, board, selected_square)
         draw_pieces(screen, board)
         draw_captured_pieces(screen, board)
-        draw_status_info(screen, board, scroll_index)
+        draw_status_info(screen, board, scroll_index, bot=bot, debug_mode=debug_mode, last_depth=last_depth)
 
         pygame.display.update()
         clock.tick(60)

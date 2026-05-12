@@ -13,6 +13,7 @@ PIECES_VALUES = {
 class Agent:
     def __init__(self, method="minimax"):
         self.method = method
+        self.nodes_searched = 0
     
     def evaluate(self, board):
         if board.is_checkmate():
@@ -44,6 +45,7 @@ class Agent:
         return white_material - black_material
 
     def minimax(self, board, depth, maximizing_player):
+        self.nodes_searched += 1
         if depth == 0 or board.is_game_over():
             return self.evaluate(board)
         
@@ -66,7 +68,36 @@ class Agent:
                     min_eval = eval_score
             return min_eval
 
-    def find_move(self, board, depth=3):
+    def alpha_beta(self, board, depth, alpha, beta, maximizing_player):
+        self.nodes_searched += 1
+        if depth == 0 or board.is_game_over():
+            return self.evaluate(board)
+        
+        if maximizing_player:
+            max_eval = -float('inf')
+            for move in board.legal_moves:
+                board.push(move)
+                eval_score = self.alpha_beta(board, depth - 1, alpha, beta, False)
+                board.pop()
+                max_eval = max(max_eval, eval_score)
+                alpha = max(alpha, eval_score)
+                if beta <= alpha:
+                    break
+            return max_eval
+        else:
+            min_eval = float('inf')
+            for move in board.legal_moves:
+                board.push(move)
+                eval_score = self.alpha_beta(board, depth - 1, alpha, beta, True)
+                board.pop()
+                min_eval = min(min_eval, eval_score)
+                beta = min(beta, eval_score)
+                if beta <= alpha:
+                    break
+            return min_eval
+
+    def find_move(self, board, depth=5):
+        self.nodes_searched = 0
         if self.method == "random":
             legal_moves = list(board.legal_moves)
             if legal_moves:
@@ -97,10 +128,44 @@ class Agent:
                         best_move = move
                         
             return best_move
+        elif self.method == "minimax_ab":
+            legal_moves = list(board.legal_moves)
+            captures = list(board.generate_legal_captures)
+            moves_mvv = captures + legal_moves
+            if not legal_moves:
+                return None
+            
+            best_move = None
+            if board.turn == chess.WHITE:
+                best_score = -float('inf')
+                alpha = -float('inf')
+                beta = float('inf')
+                for move in legal_moves:
+                    board.push(move)
+                    score = self.alpha_beta(board, depth - 1, alpha, beta, False)
+                    board.pop()
+                    if score > best_score:
+                        best_score = score
+                        best_move = move
+                    alpha = max(alpha, score)
+            else:
+                best_score = float('inf')
+                alpha = -float('inf')
+                beta = float('inf')
+                for move in legal_moves:
+                    board.push(move)
+                    score = self.alpha_beta(board, depth - 1, alpha, beta, True)
+                    board.pop()
+                    if score < best_score:
+                        best_score = score
+                        best_move = move
+                    beta = min(beta, score)
+                        
+            return best_move
         return None
 
 if __name__ == "__main__":
-    board = chess.Bitboard()
+    board = chess.Board()
     agent = Agent()
 
     move = agent.find_move(board)

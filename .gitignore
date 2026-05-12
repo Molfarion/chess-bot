@@ -4,5 +4,13 @@ __pycache__/
 
 .venv/
 venv/
+*.sh
+*.json
 
 .vscode/
+
+# Fastchess & Benchmarks
+fastchess-linux-x86-64.tar
+fastchess-linux-x86-64/
+benchmarks/*.pgn
+benchmarks/*.log
