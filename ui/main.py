@@ -354,6 +354,9 @@ def main():
             pygame.time.delay(100)
 
             bot_move = bot.find_move(board)
+            evaluation = bot.evaluate(board)
+            print(evaluation)
+            
             if bot_move:
                 board.push(bot_move)
 
