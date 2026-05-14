@@ -91,6 +91,9 @@ PST_MAP = {
     chess.KING: KING_PST
 }
 
+NULL_MOVE_REDUCTION = 2
+
+ASPIRATION_DELTA = 200
 
 class Agent:
     def __init__(self, method="minimax"):
@@ -183,9 +186,9 @@ class Agent:
 
         return int(penalty * phase)
 
-    def evaluate(self, board):
+    def evaluate(self, board, depth=0):
         if board.is_checkmate():
-            return -100000 if board.turn == chess.WHITE else 100000
+            return -100000 - depth if board.turn == chess.WHITE else 100000 + depth
         elif board.is_game_over():
             return 0
 
@@ -272,7 +275,7 @@ class Agent:
     def minimax(self, board, depth, maximizing_player):
         self.nodes_searched += 1
         if depth == 0 or board.is_game_over():
-            return self.evaluate(board)
+            return self.evaluate(board, depth)
 
         moves = sorted(board.legal_moves, key=lambda m: self.score_move(board, m), reverse=True)
 
@@ -298,7 +301,7 @@ class Agent:
     def alpha_beta(self, board, depth, alpha, beta, maximizing_player):
         self.nodes_searched += 1
         if depth == 0 or board.is_game_over():
-            return self.evaluate(board)
+            return self.evaluate(board, depth)
 
         moves = sorted(board.legal_moves, key=lambda m: self.score_move(board, m), reverse=True)
 
@@ -333,7 +336,7 @@ class Agent:
         self.nodes_searched += 1
 
         if board.is_game_over():
-            return self.evaluate(board)
+            return self.evaluate(board, depth)
 
         if depth == 0:
             # Hand off to quiescence instead of a raw static eval.
@@ -388,13 +391,37 @@ class Agent:
                 return tt_entry['score']
 
         if board.is_game_over():
-            return self.evaluate(board)
+            return self.evaluate(board, depth)
 
         if depth == 0:
             if maximizing_player:
                 return self.quiescence(board, alpha, beta)
             else:
                 return -self.quiescence(board, -beta, -alpha)
+
+        is_endgame = self.game_phase(board) < 0.2
+        if (not board.is_check()
+            and not is_endgame
+            and depth >= NULL_MOVE_REDUCTION + 1):
+            board.push(chess.Move.null())
+            if maximizing_player:
+                null_score = self.alpha_beta_qs_tt(
+                    board, depth - 1 - NULL_MOVE_REDUCTION,
+                    beta - 1, beta,
+                    False
+                )
+                board.pop()
+                if null_score >= beta:
+                    return beta
+            else:
+                null_score = self.alpha_beta_qs_tt(
+                    board, depth - 1 - NULL_MOVE_REDUCTION,
+                    alpha, alpha + 1,
+                    True
+                )
+                board.pop()
+                if null_score <= alpha:
+                    return alpha
 
         moves = list(board.legal_moves)
         best_move_tt = tt_entry['best_move'] if tt_entry else None
@@ -469,54 +496,34 @@ class Agent:
 
     def iterative_deepening(self, board, max_depth):
         best_move = None
+        prev_score = 0
         for d in range(1, max_depth + 1):
-            legal_moves = list(board.legal_moves)
-            
-            def get_move_score(m):
-                if m == best_move:
-                    return 1000000
-                board.push(m)
-                state_key = board._transposition_key() if hasattr(board, '_transposition_key') else board.fen()
-                entry = self.transposition_table.get(state_key)
-                board.pop()
-                if entry:
-                    return 500000 + entry['score'] if board.turn == chess.WHITE else 500000 - entry['score']
-                return self.score_move(board, m)
-                
-            legal_moves.sort(key=get_move_score, reverse=True)
-            
-            current_best_move = None
-            if board.turn == chess.WHITE:
-                best_score = -float('inf')
+            if d <= 2:
                 alpha = -float('inf')
-                beta = float('inf')
-                for move in legal_moves:
-                    board.push(move)
-                    score = self.alpha_beta_qs_tt(board, d - 1, alpha, beta, False)
-                    board.pop()
-                    if score > best_score:
-                        best_score = score
-                        current_best_move = move
-                    alpha = max(alpha, score)
+                beta  = float('inf')
             else:
-                best_score = float('inf')
-                alpha = -float('inf')
-                beta = float('inf')
-                for move in legal_moves:
-                    board.push(move)
-                    score = self.alpha_beta_qs_tt(board, d - 1, alpha, beta, True)
-                    board.pop()
-                    if score < best_score:
-                        best_score = score
-                        current_best_move = move
-                    beta = min(beta, score)
+                alpha = prev_score - ASPIRATION_DELTA
+                beta  = prev_score + ASPIRATION_DELTA
+                
+            while True:
+                score = self.alpha_beta_qs_tt(board, d, alpha, beta, board.turn == chess.WHITE)
+                
+                if score <= alpha:
+                    alpha = -float('inf')  # Failed low, widen lower bound
+                elif score >= beta:
+                    beta = float('inf')    # Failed high, widen upper bound
+                else:
+                    prev_score = score     # Exact score found within window
+                    break
                     
-            if current_best_move:
-                best_move = current_best_move
+            state_key = chess.polyglot.zobrist_hash(board)
+            tt_entry = self.transposition_table.get(state_key)
+            if tt_entry and tt_entry['best_move']:
+                best_move = tt_entry['best_move']
                 
         return best_move
 
-    def find_move(self, board, depth=4):
+    def find_move(self, board, depth=3):
         self.nodes_searched = 0
         self.tt_hits = 0
         legal_moves = list(board.legal_moves)
