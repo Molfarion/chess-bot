@@ -92,24 +92,22 @@ class Agent:
     def __init__(self, method="minimax"):
         self.method = method
         self.nodes_searched = 0
-    
+        self.transposition_table = {}
+
     def evaluate(self, board):
         if board.is_checkmate():
             if board.turn == chess.WHITE:
-                # White is checkmated 
                 return -100000
             else:
-                # Black is checkmated 
                 return 100000
         elif board.is_game_over():
-            # Stalemate, draw by insufficient material
             return 0
 
         score = 0
         for sq, piece in board.piece_map().items():
             value = PIECES_VALUES.get(piece.piece_type, 0)
             pst_table = PST_MAP.get(piece.piece_type)
-            
+
             if piece.color == chess.WHITE:
                 pst_val = pst_table[sq] if pst_table else 0
                 score += value + pst_val
@@ -119,7 +117,7 @@ class Agent:
                 score -= (value + pst_val_black)
 
         return score
-    
+
     def score_move(self, board, move):
         if board.is_capture(move):
             victim = board.piece_at(move.to_square)
@@ -130,18 +128,52 @@ class Agent:
         if move.promotion:
             return 900
         return 0
+    def quiescence(self, board, alpha, beta, qs_depth = 3):
+        """
+        Search captures (and promotions) until the position is quiet,
+        then return a static evaluation.
+        """
+        self.nodes_searched += 1
+        
+        eval_score = self.evaluate(board)
+        stand_pat = eval_score if board.turn == chess.WHITE else -eval_score
+
+        if qs_depth == 0:
+            return stand_pat
+
+        # Stand-pat: evaluate the position without making any more captures.
+        # If it's already >= beta, prune immediately (opponent won't allow this).
+        if stand_pat >= beta:
+            return beta
+        if stand_pat > alpha:
+            alpha = stand_pat
+
+        # Only look at captures (and promotions) to keep the search focused.
+        capture_moves = [m for m in board.legal_moves if board.is_capture(m) or m.promotion]
+        capture_moves.sort(key=lambda m: self.score_move(board, m), reverse=True)
+
+        for move in capture_moves:
+            board.push(move)
+            score = -self.quiescence(board, -beta, -alpha, qs_depth-1)
+            board.pop()
+
+            if score >= beta:
+                return beta
+            if score > alpha:
+                alpha = score
+
+        return alpha
 
     def minimax(self, board, depth, maximizing_player):
         self.nodes_searched += 1
         if depth == 0 or board.is_game_over():
             return self.evaluate(board)
-        
-        moves = list(board.legal_moves)
-        moves.sort(key=lambda m: self.score_move(board, m), reverse=True)
-        
+
+        moves = sorted(board.legal_moves, key=lambda m: self.score_move(board, m), reverse=True)
+
         if maximizing_player:
             max_eval = -float('inf')
-            for move in board.legal_moves:
+            for move in moves:
                 board.push(move)
                 eval_score = self.minimax(board, depth - 1, False)
                 board.pop()
@@ -150,7 +182,7 @@ class Agent:
             return max_eval
         else:
             min_eval = float('inf')
-            for move in board.legal_moves:
+            for move in moves:
                 board.push(move)
                 eval_score = self.minimax(board, depth - 1, True)
                 board.pop()
@@ -162,13 +194,12 @@ class Agent:
         self.nodes_searched += 1
         if depth == 0 or board.is_game_over():
             return self.evaluate(board)
-        
-        moves = list(board.legal_moves)
-        moves.sort(key=lambda m: self.score_move(board, m), reverse=True)
-        
+
+        moves = sorted(board.legal_moves, key=lambda m: self.score_move(board, m), reverse=True)
+
         if maximizing_player:
             max_eval = -float('inf')
-            for move in board.legal_moves:
+            for move in moves:
                 board.push(move)
                 eval_score = self.alpha_beta(board, depth - 1, alpha, beta, False)
                 board.pop()
@@ -179,7 +210,7 @@ class Agent:
             return max_eval
         else:
             min_eval = float('inf')
-            for move in board.legal_moves:
+            for move in moves:
                 board.push(move)
                 eval_score = self.alpha_beta(board, depth - 1, alpha, beta, True)
                 board.pop()
@@ -189,77 +220,103 @@ class Agent:
                     break
             return min_eval
 
+    def alpha_beta_qs(self, board, depth, alpha, beta, maximizing_player):
+        """
+        Alpha-beta that drops into quiescence search at depth 0 instead
+        of calling evaluate() directly.
+        """
+        self.nodes_searched += 1
+
+        if board.is_game_over():
+            return self.evaluate(board)
+
+        if depth == 0:
+            # Hand off to quiescence instead of a raw static eval.
+            # Note: quiescence uses negamax-style signs internally,
+            # so we flip for the minimizing player.
+            if maximizing_player:
+                return self.quiescence(board, alpha, beta)
+            else:
+                return -self.quiescence(board, -beta, -alpha)
+
+        moves = sorted(board.legal_moves, key=lambda m: self.score_move(board, m), reverse=True)
+
+        if maximizing_player:
+            max_eval = -float('inf')
+            for move in moves:
+                board.push(move)
+                eval_score = self.alpha_beta_qs(board, depth - 1, alpha, beta, False)
+                board.pop()
+                max_eval = max(max_eval, eval_score)
+                alpha = max(alpha, eval_score)
+                if beta <= alpha:
+                    break
+            return max_eval
+        else:
+            min_eval = float('inf')
+            for move in moves:
+                board.push(move)
+                eval_score = self.alpha_beta_qs(board, depth - 1, alpha, beta, True)
+                board.pop()
+                min_eval = min(min_eval, eval_score)
+                beta = min(beta, eval_score)
+                if beta <= alpha:
+                    break
+            return min_eval
+
     def find_move(self, board, depth=4):
         self.nodes_searched = 0
+        legal_moves = list(board.legal_moves)
+        if not legal_moves:
+            return None
+
         if self.method == "random":
-            legal_moves = list(board.legal_moves)
-            if legal_moves:
-                return random.choice(legal_moves)
-        elif self.method == "minimax":
-            legal_moves = list(board.legal_moves)
-            if not legal_moves:
-                return None
-            
-            best_move = None
-            if board.turn == chess.WHITE:
-                best_score = -float('inf')
-                for move in legal_moves:
-                    board.push(move)
-                    score = self.minimax(board, depth - 1, False)
-                    board.pop()
-                    if score > best_score:
-                        best_score = score
-                        best_move = move
-            else:
-                best_score = float('inf')
-                for move in legal_moves:
-                    board.push(move)
-                    score = self.minimax(board, depth - 1, True)
-                    board.pop()
-                    if score < best_score:
-                        best_score = score
-                        best_move = move
-                        
-            return best_move
+            return random.choice(legal_moves)
+
+        if self.method == "minimax":
+            search_fn = lambda b, d, a, b_, maximizing: self.minimax(b, d, maximizing)
         elif self.method == "minimax_ab":
-            legal_moves = list(board.legal_moves)
-            legal_moves.sort(key=lambda m: self.score_move(board, m), reverse=True)
-            if not legal_moves:
-                return None
-            
-            best_move = None
-            if board.turn == chess.WHITE:
-                best_score = -float('inf')
-                alpha = -float('inf')
-                beta = float('inf')
-                for move in legal_moves:
-                    board.push(move)
-                    score = self.alpha_beta(board, depth - 1, alpha, beta, False)
-                    board.pop()
-                    if score > best_score:
-                        best_score = score
-                        best_move = move
-                    alpha = max(alpha, score)
-            else:
-                best_score = float('inf')
-                alpha = -float('inf')
-                beta = float('inf')
-                for move in legal_moves:
-                    board.push(move)
-                    score = self.alpha_beta(board, depth - 1, alpha, beta, True)
-                    board.pop()
-                    if score < best_score:
-                        best_score = score
-                        best_move = move
-                    beta = min(beta, score)
-                        
-            return best_move
-        return None
+            search_fn = lambda b, d, a, b_, maximizing: self.alpha_beta(b, d, a, b_, maximizing)
+        elif self.method == "minimax_ab_qs":
+            search_fn = lambda b, d, a, b_, maximizing: self.alpha_beta_qs(b, d, a, b_, maximizing)
+        else:
+            return random.choice(legal_moves)
+
+        legal_moves.sort(key=lambda m: self.score_move(board, m), reverse=True)
+
+        best_move = None
+        if board.turn == chess.WHITE:
+            best_score = -float('inf')
+            alpha = -float('inf')
+            beta = float('inf')
+            for move in legal_moves:
+                board.push(move)
+                score = search_fn(board, depth - 1, alpha, beta, False)
+                board.pop()
+                if score > best_score:
+                    best_score = score
+                    best_move = move
+                alpha = max(alpha, score)
+        else:
+            best_score = float('inf')
+            alpha = -float('inf')
+            beta = float('inf')
+            for move in legal_moves:
+                board.push(move)
+                score = search_fn(board, depth - 1, alpha, beta, True)
+                board.pop()
+                if score < best_score:
+                    best_score = score
+                    best_move = move
+                beta = min(beta, score)
+
+        return best_move
+
 
 if __name__ == "__main__":
     board = chess.Board()
-    agent = Agent()
 
-    move = agent.find_move(board)
-    evaluation = agent.evaluate(board)
-    print(f"Sample Move: {move}, Evaluation: {evaluation}")
+    for method in ["minimax", "minimax_ab", "minimax_ab_qs"]:
+        agent = Agent(method=method)
+        move = agent.find_move(board, depth=4)
+        print(f"[{method}] move={move}, nodes={agent.nodes_searched}")

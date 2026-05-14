@@ -476,6 +476,8 @@ def main():
                     debug_mode = not debug_mode
                 elif event.key == pygame.K_m:
                     if bot.method == "minimax_ab":
+                        bot.method = "minimax_ab_qs"
+                    elif bot.method == "minimax_ab_qs":
                         bot.method = "minimax"
                     elif bot.method == "minimax":
                         bot.method = "sunfish"
