@@ -95,6 +95,9 @@ NULL_MOVE_REDUCTION = 2
 
 ASPIRATION_DELTA = 200
 
+FULL_DEPTH_MOVES = 3   
+LMR_MIN_DEPTH   = 2 
+
 class Agent:
     def __init__(self, method="minimax"):
         self.method = method
@@ -236,6 +239,7 @@ class Agent:
         if move.promotion:
             return 900
         return 0
+    
     def quiescence(self, board, alpha, beta, qs_depth = 3):
         """
         Search captures (and promotions) until the position is quiet,
@@ -372,12 +376,13 @@ class Agent:
                     break
             return min_eval
 
-    def alpha_beta_qs_tt(self, board, depth, alpha, beta, maximizing_player):
+    def negamax(self, board, depth, alpha, beta, null_move_allowed=True, lmr_allowed=True):
         self.nodes_searched += 1
+        original_alpha = alpha
 
         state_key = chess.polyglot.zobrist_hash(board)
-        tt_entry = self.transposition_table.get(state_key)
-        
+        tt_entry  = self.transposition_table.get(state_key)
+
         if tt_entry is not None and tt_entry['depth'] >= depth:
             self.tt_hits += 1
             if tt_entry['flag'] == 'EXACT':
@@ -386,113 +391,88 @@ class Agent:
                 alpha = max(alpha, tt_entry['score'])
             elif tt_entry['flag'] == 'UPPERBOUND':
                 beta = min(beta, tt_entry['score'])
-                
             if alpha >= beta:
                 return tt_entry['score']
 
         if board.is_game_over():
-            return self.evaluate(board, depth)
+            score = self.evaluate(board)
+            return score if board.turn == chess.WHITE else -score
 
-        if depth == 0:
-            if maximizing_player:
-                return self.quiescence(board, alpha, beta)
-            else:
-                return -self.quiescence(board, -beta, -alpha)
+        if depth <= 0:
+            return self.quiescence(board, alpha, beta)
 
+        # Null-move pruning
         is_endgame = self.game_phase(board) < 0.2
-        if (not board.is_check()
-            and not is_endgame
-            and depth >= NULL_MOVE_REDUCTION + 1):
+        if (null_move_allowed
+                and not board.is_check()
+                and not is_endgame
+                and depth >= NULL_MOVE_REDUCTION + 1):
             board.push(chess.Move.null())
-            if maximizing_player:
-                null_score = self.alpha_beta_qs_tt(
-                    board, depth - 1 - NULL_MOVE_REDUCTION,
-                    beta - 1, beta,
-                    False
-                )
-                board.pop()
-                if null_score >= beta:
-                    return beta
-            else:
-                null_score = self.alpha_beta_qs_tt(
-                    board, depth - 1 - NULL_MOVE_REDUCTION,
-                    alpha, alpha + 1,
-                    True
-                )
-                board.pop()
-                if null_score <= alpha:
-                    return alpha
+            null_score = -self.negamax(
+                board, depth - 1 - NULL_MOVE_REDUCTION,
+                -beta, -beta + 1,
+                null_move_allowed=False
+            )
+            board.pop()
+            if null_score >= beta:
+                return beta
 
         moves = list(board.legal_moves)
         best_move_tt = tt_entry['best_move'] if tt_entry else None
-        
-        def move_score(m):
-            if m == best_move_tt:
-                return 1000000
-            return self.score_move(board, m)
-            
-        moves.sort(key=move_score, reverse=True)
-
-        original_alpha = alpha
-        original_beta = beta
         best_move_current = None
 
-        if maximizing_player:
-            max_eval = -float('inf')
-            for move in moves:
-                board.push(move)
-                eval_score = self.alpha_beta_qs_tt(board, depth - 1, alpha, beta, False)
-                board.pop()
+        moves.sort(key=lambda m: 1000000 if m == best_move_tt else self.score_move(board, m), reverse=True)
+
+        max_eval = -float('inf')
+        
+        for i, move in enumerate(moves):
+            is_capture   = board.is_capture(move)
+            is_promotion = move.promotion is not None
+            board.push(move)
+            gives_check  = board.is_check()
+
+            reduce = (
+                lmr_allowed
+                and depth >= LMR_MIN_DEPTH
+                and i >= FULL_DEPTH_MOVES
+                and not is_capture
+                and not gives_check
+                and not is_promotion
+            )
+
+            if reduce:
+                reduction = 1 if i < 8 else 2
+                eval_score = -self.negamax(
+                    board, depth - 1 - reduction, -alpha - 1, -alpha,
+                    lmr_allowed=False
+                )
+                if eval_score > alpha:
+                    eval_score = -self.negamax(
+                        board, depth - 1, -beta, -alpha,
+                        lmr_allowed=False
+                    )
+            else:
+                eval_score = -self.negamax(board, depth - 1, -beta, -alpha)
                 
-                if eval_score > max_eval:
-                    max_eval = eval_score
-                    best_move_current = move
-                
-                alpha = max(alpha, eval_score)
-                if beta <= alpha:
-                    break
+            board.pop()
             
-            flag = 'EXACT'
-            if max_eval <= original_alpha:
-                flag = 'UPPERBOUND'
-            elif max_eval >= beta:
-                flag = 'LOWERBOUND'
+            if eval_score > max_eval:
+                max_eval = eval_score
+                best_move_current = move
                 
-            self.transposition_table[state_key] = {
-                'score': max_eval,
-                'depth': depth,
-                'flag': flag,
-                'best_move': best_move_current
-            }
-            return max_eval
-        else:
-            min_eval = float('inf')
-            for move in moves:
-                board.push(move)
-                eval_score = self.alpha_beta_qs_tt(board, depth - 1, alpha, beta, True)
-                board.pop()
+            alpha = max(alpha, eval_score)
+            if alpha >= beta:
+                break
+
+        flag = ('EXACT' if original_alpha < max_eval < beta
+                else 'UPPERBOUND' if max_eval <= original_alpha
+                else 'LOWERBOUND')
                 
-                if eval_score < min_eval:
-                    min_eval = eval_score
-                    best_move_current = move
-                    
-                beta = min(beta, eval_score)
-                if beta <= alpha:
-                    break
-                    
-            flag = 'EXACT'
-            if min_eval <= alpha:
-                flag = 'UPPERBOUND'
-            elif min_eval >= original_beta:
-                flag = 'LOWERBOUND'
-                
-            self.transposition_table[state_key] = {
-                'score': min_eval,
-                'depth': depth,
-                'flag': flag,
-                'best_move': best_move_current
-            }
-            return min_eval
+        self.transposition_table[state_key] = {
+            'score': max_eval, 'depth': depth,
+            'flag': flag, 'best_move': best_move_current
+        }
+        return max_eval
 
     def iterative_deepening(self, board, max_depth):
         best_move = None
@@ -506,7 +486,7 @@ class Agent:
                 beta  = prev_score + ASPIRATION_DELTA
                 
             while True:
-                score = self.alpha_beta_qs_tt(board, d, alpha, beta, board.turn == chess.WHITE)
+                score = self.negamax(board, d, alpha, beta)
                 
                 if score <= alpha:
                     alpha = -float('inf')  # Failed low, widen lower bound
@@ -523,7 +503,7 @@ class Agent:
                 
         return best_move
 
-    def find_move(self, board, depth=3):
+    def find_move(self, board, depth=4):
         self.nodes_searched = 0
         self.tt_hits = 0
         legal_moves = list(board.legal_moves)
@@ -536,7 +516,7 @@ class Agent:
         if self.method == "random":
             return random.choice(legal_moves)
 
-        if self.method == "minimax_ab_qs_tt":
+        if self.method == "negamax_tt":
             return self.iterative_deepening(board, depth)
 
         if self.method == "minimax":
@@ -582,7 +562,7 @@ class Agent:
 if __name__ == "__main__":
     board = chess.Board()
 
-    for method in ["minimax", "minimax_ab", "minimax_ab_qs", "minimax_ab_qs_tt"]:
+    for method in ["minimax", "minimax_ab", "minimax_ab_qs", "negamax_tt"]:
         agent = Agent(method=method)
         move = agent.find_move(board, depth=4)
         print(f"[{method}] move={move}, nodes={agent.nodes_searched}")

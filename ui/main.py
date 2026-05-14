@@ -432,7 +432,7 @@ def main():
 
     starting_fen = chess.STARTING_FEN
 
-    bot = Agent(method="minimax_ab_qs_tt")
+    bot = Agent(method="negamax_tt")
     sunfish_bot = UCIEngineAgent("engine/sunfish.py")
     board = chess.Board(starting_fen)
     board.starting_fen = starting_fen
@@ -484,8 +484,8 @@ def main():
                     if bot.method == "minimax_ab":
                         bot.method = "minimax_ab_qs"
                     elif bot.method == "minimax_ab_qs":
-                        bot.method = "minimax_ab_qs_tt"
-                    elif bot.method == "minimax_ab_qs_tt":
+                        bot.method = "negamax_tt"
+                    elif bot.method == "negamax_tt":
                         bot.method = "minimax"
                     elif bot.method == "minimax":
                         bot.method = "sunfish"
