@@ -4,6 +4,72 @@ import sys
 import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from engine.engine import Agent
+import subprocess
+
+class UCIEngineAgent:
+    def __init__(self, script_path):
+        self.script_path = script_path
+        self.method = "sunfish"
+        self.process = subprocess.Popen(
+            [sys.executable, script_path],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            text=True,
+            bufsize=1
+        )
+        self.nodes_searched = 0
+        self.send("uci")
+        self.read_until("uciok")
+        self.send("isready")
+        self.read_until("readyok")
+
+    def send(self, cmd):
+        self.process.stdin.write(cmd + "\n")
+        self.process.stdin.flush()
+
+    def read_until(self, expected):
+        while True:
+            line = self.process.stdout.readline().strip()
+            if expected in line:
+                return line
+
+    def find_move(self, board, depth=3):
+        self.send("ucinewgame")
+        self.send("isready")
+        self.read_until("readyok")
+        
+        moves_str = " ".join(m.uci() for m in board.move_stack)
+        if moves_str:
+            self.send(f"position startpos moves {moves_str}")
+        else:
+            self.send("position startpos")
+            
+        self.send(f"go depth {depth}")
+        
+        self.nodes_searched = 0
+        while True:
+            line = self.process.stdout.readline().strip()
+            if line.startswith("info"):
+                parts = line.split()
+                if "nodes" in parts:
+                    try:
+                        nodes_idx = parts.index("nodes")
+                        self.nodes_searched = int(parts[nodes_idx + 1])
+                    except (ValueError, IndexError):
+                        pass
+            elif line.startswith("bestmove"):
+                parts = line.split()
+                if len(parts) >= 2 and parts[1] != "(none)":
+                    return chess.Move.from_uci(parts[1])
+                break
+        return None
+
+    def quit(self):
+        try:
+            self.send("quit")
+        except Exception:
+            pass
+        self.process.terminate()
 
 pygame.init()
 pygame.font.init()
@@ -361,6 +427,7 @@ def main():
     starting_fen = chess.STARTING_FEN
 
     bot = Agent(method="minimax_ab")
+    sunfish_bot = UCIEngineAgent("engine/sunfish.py")
     board = chess.Board(starting_fen)
     board.starting_fen = starting_fen
     
@@ -370,7 +437,7 @@ def main():
     prev_move_count = 0
     
     debug_mode = True
-    last_depth = 3
+    last_depth = 4
 
     run = True
     while run:
@@ -384,9 +451,10 @@ def main():
         if not board.is_game_over() and board.turn == chess.BLACK:
             pygame.time.delay(100)
 
-            bot_move = bot.find_move(board)
-            evaluation = bot.evaluate(board)
-            print(evaluation)
+            if bot.method == "sunfish":
+                bot_move = sunfish_bot.find_move(board, depth=4)
+            else:
+                bot_move = bot.find_move(board)
             
             if bot_move:
                 board.push(bot_move)
@@ -410,6 +478,8 @@ def main():
                     if bot.method == "minimax_ab":
                         bot.method = "minimax"
                     elif bot.method == "minimax":
+                        bot.method = "sunfish"
+                    elif bot.method == "sunfish":
                         bot.method = "random"
                     else:
                         bot.method = "minimax_ab"
@@ -466,11 +536,13 @@ def main():
         draw_legal_highlights(screen, board, selected_square)
         draw_pieces(screen, board)
         draw_captured_pieces(screen, board)
-        draw_status_info(screen, board, scroll_index, bot=bot, debug_mode=debug_mode, last_depth=last_depth)
+        active_bot = sunfish_bot if bot.method == "sunfish" else bot
+        draw_status_info(screen, board, scroll_index, bot=active_bot, debug_mode=debug_mode, last_depth=last_depth)
 
         pygame.display.update()
         clock.tick(60)
 
+    sunfish_bot.quit()
     pygame.quit()
     sys.exit()
 
