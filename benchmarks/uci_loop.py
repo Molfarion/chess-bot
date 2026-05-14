@@ -11,7 +11,7 @@ from engine.engine import Agent
 def uci_loop():
     # Setup CLI arguments so you can configure different versions in tournaments
     parser = argparse.ArgumentParser(description="bolt UCI wrapper")
-    parser.add_argument("--method", choices=["minimax", "minimax_ab", "random"], default="minimax_ab", help="The search method to use")
+    parser.add_argument("--method", choices=["minimax", "minimax_ab", "minimax_ab_qs", "minimax_ab_qs_tt", "random"], default="minimax_ab", help="The search method to use")
     parser.add_argument("--depth", type=int, default=3, help="Default search depth for minimax")
     parser.add_argument("--no-info", action="store_true", help="Disable outputting standard UCI info logs")
     args, unknown = parser.parse_known_args()

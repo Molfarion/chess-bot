@@ -412,6 +412,12 @@ def draw_status_info(win, board, scroll_index, bot=None, debug_mode=False, last_
         win.blit(method_surf, (x_pos + 12, Y_OFFSET + BOARD_SIZE - 68))
         win.blit(depth_surf, (x_pos + 12, Y_OFFSET + BOARD_SIZE - 48))
         win.blit(nodes_surf, (x_pos + 12, Y_OFFSET + BOARD_SIZE - 28))
+        
+        if hasattr(bot, 'tt_hits'):
+            tt_size = len(bot.transposition_table) if hasattr(bot, 'transposition_table') else 0
+            tt_str = f"TT Size: {tt_size:,} | Hits: {bot.tt_hits:,}"
+            tt_surf = font_ui_small.render(tt_str, True, COLOR_HEADER_GREEN)
+            win.blit(tt_surf, (x_pos + 12, Y_OFFSET + BOARD_SIZE - 10))
     else:
         # If debug is off, show a small hint at the bottom
         hint_surf = font_ui_small.render("Press D to enable Debug Metrics", True, COLOR_TEXT_MUTED)
@@ -426,7 +432,7 @@ def main():
 
     starting_fen = chess.STARTING_FEN
 
-    bot = Agent(method="minimax_ab")
+    bot = Agent(method="minimax_ab_qs_tt")
     sunfish_bot = UCIEngineAgent("engine/sunfish.py")
     board = chess.Board(starting_fen)
     board.starting_fen = starting_fen
@@ -478,6 +484,8 @@ def main():
                     if bot.method == "minimax_ab":
                         bot.method = "minimax_ab_qs"
                     elif bot.method == "minimax_ab_qs":
+                        bot.method = "minimax_ab_qs_tt"
+                    elif bot.method == "minimax_ab_qs_tt":
                         bot.method = "minimax"
                     elif bot.method == "minimax":
                         bot.method = "sunfish"
