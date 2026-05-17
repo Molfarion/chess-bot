@@ -191,7 +191,7 @@ class Agent:
 
     def evaluate(self, board, depth=0):
         if board.is_checkmate():
-            return -100000 - depth if board.turn == chess.WHITE else 100000 + depth
+            return -100000 + depth 
         elif board.is_game_over():
             return 0
 
@@ -210,13 +210,21 @@ class Agent:
                 score -= (value + pst_table[chess.square_mirror(sq)])
 
         # Count legal moves for the side to move, then flip and count for the other
-        white_mobility = sum(1 for _ in board.generate_legal_moves()) if board.turn == chess.WHITE else 0
-        board.push(chess.Move.null())
-        black_mobility = sum(1 for _ in board.generate_legal_moves()) if board.turn == chess.BLACK else 0
-        board.pop()
-        # If it was Black's turn initially, swap
-        if board.turn == chess.BLACK:
-            white_mobility, black_mobility = black_mobility, white_mobility
+        white_mobility = 0
+        black_mobility = 0
+        if board.turn == chess.WHITE:
+            white_mobility = board.legal_moves.count()
+            if not board.is_check():
+                board.push(chess.Move.null())
+                black_mobility = board.legal_moves.count()
+                board.pop()
+        else:
+            black_mobility = board.legal_moves.count()
+            if not board.is_check():
+                board.push(chess.Move.null())
+                white_mobility = board.legal_moves.count()
+                board.pop()
+
         score += 5 * (white_mobility - black_mobility)
 
         # --- Pawn structure ---
@@ -227,7 +235,7 @@ class Agent:
         score += self._king_safety(board, chess.WHITE, phase)
         score -= self._king_safety(board, chess.BLACK, phase)
 
-        return score
+        return score if board.turn == chess.WHITE else -score
 
     def score_move(self, board, move):
         if board.is_capture(move):
@@ -247,8 +255,7 @@ class Agent:
         """
         self.nodes_searched += 1
         
-        eval_score = self.evaluate(board)
-        stand_pat = eval_score if board.turn == chess.WHITE else -eval_score
+        stand_pat = self.evaluate(board)
 
         if qs_depth == 0:
             return stand_pat
@@ -395,8 +402,7 @@ class Agent:
                 return tt_entry['score']
 
         if board.is_game_over():
-            score = self.evaluate(board)
-            return score if board.turn == chess.WHITE else -score
+            return self.evaluate(board)
 
         if depth <= 0:
             return self.quiescence(board, alpha, beta)
@@ -446,7 +452,7 @@ class Agent:
                     board, depth - 1 - reduction, -alpha - 1, -alpha,
                     lmr_allowed=False
                 )
-                if eval_score > alpha:
+                if alpha < eval_score < beta:
                     eval_score = -self.negamax(
                         board, depth - 1, -beta, -alpha,
                         lmr_allowed=False

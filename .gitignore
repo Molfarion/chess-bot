@@ -16,3 +16,8 @@ fastchess-linux-x86-64.tar
 fastchess-linux-x86-64/
 benchmarks/*.pgn
 benchmarks/*.log
+
+# Sunfish (Stockfish 1.0 legacy)
+stockfish-1.0/
+
+test_positions/

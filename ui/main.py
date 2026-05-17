@@ -10,8 +10,12 @@ class UCIEngineAgent:
     def __init__(self, script_path):
         self.script_path = script_path
         self.method = "sunfish"
+        if script_path.endswith('.py'):
+            cmd = [sys.executable, script_path]
+        else:
+            cmd = [script_path]
         self.process = subprocess.Popen(
-            [sys.executable, script_path],
+            cmd,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             text=True,
@@ -392,26 +396,34 @@ def draw_status_info(win, board, scroll_index, bot=None, debug_mode=False, last_
     # Draw Debug Metrics Panel
     if debug_mode and bot is not None:
         # Draw a beautiful amber gold panel for Debug Info
-        debug_rect = (x_pos, Y_OFFSET + BOARD_SIZE - 95, 320, 95)
+        debug_rect = (x_pos, Y_OFFSET + BOARD_SIZE - 125, 320, 125)
         pygame.draw.rect(win, (35, 36, 42), debug_rect, border_radius=6)
         pygame.draw.rect(win, COLOR_TEXT_ACCENT, debug_rect, 1, border_radius=6)
         
         # Title
         title_surf = font_ui_small.render("DEBUG METRICS (Press D to disable)", True, COLOR_TEXT_ACCENT)
-        win.blit(title_surf, (x_pos + 12, Y_OFFSET + BOARD_SIZE - 87))
+        win.blit(title_surf, (x_pos + 12, Y_OFFSET + BOARD_SIZE - 117))
         
         # Stats
         method_str = f"Search Method: {bot.method.upper()}"
         depth_str = f"Search Depth: {last_depth}"
         nodes_str = f"Moves Considered: {bot.nodes_searched:,}"
         
+        eval_raw = bot.evaluate(board) if hasattr(bot, 'evaluate') else 0
+        eval_w_raw = eval_raw if board.turn == chess.WHITE else -eval_raw
+        eval_w = eval_w_raw / 100.0
+        eval_b = -eval_w
+        eval_str = f"Eval (W): {eval_w:+.2f} | (B): {eval_b:+.2f}"
+        
         method_surf = font_hud_text.render(method_str, True, COLOR_TEXT_MAIN)
         depth_surf = font_hud_text.render(depth_str, True, COLOR_TEXT_MAIN)
         nodes_surf = font_hud_text.render(nodes_str, True, COLOR_TEXT_MAIN)
+        eval_surf = font_hud_text.render(eval_str, True, COLOR_TEXT_MAIN)
         
-        win.blit(method_surf, (x_pos + 12, Y_OFFSET + BOARD_SIZE - 68))
-        win.blit(depth_surf, (x_pos + 12, Y_OFFSET + BOARD_SIZE - 48))
-        win.blit(nodes_surf, (x_pos + 12, Y_OFFSET + BOARD_SIZE - 28))
+        win.blit(method_surf, (x_pos + 12, Y_OFFSET + BOARD_SIZE - 98))
+        win.blit(depth_surf, (x_pos + 12, Y_OFFSET + BOARD_SIZE - 78))
+        win.blit(nodes_surf, (x_pos + 12, Y_OFFSET + BOARD_SIZE - 58))
+        win.blit(eval_surf, (x_pos + 12, Y_OFFSET + BOARD_SIZE - 38))
         
         if hasattr(bot, 'tt_hits'):
             tt_size = len(bot.transposition_table) if hasattr(bot, 'transposition_table') else 0
@@ -434,8 +446,39 @@ def main():
 
     bot = Agent(method="negamax_tt")
     sunfish_bot = UCIEngineAgent("engine/sunfish.py")
+    
+    # Initialize Stockfish 1.0 bot
+    stockfish_bin = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "stockfish-1.0", "stockfish_10_ja", "src", "stockfish")
+    stockfish_bot = None
+    if os.path.exists(stockfish_bin):
+        try:
+            stockfish_bot = UCIEngineAgent(stockfish_bin)
+            stockfish_bot.method = "stockfish"
+            print("Successfully loaded Stockfish 1.0 engine!")
+        except Exception as e:
+            print(f"Failed to load Stockfish 1.0 binary: {e}")
+            
     board = chess.Board(starting_fen)
     board.starting_fen = starting_fen
+    
+    import glob
+    test_fens = []
+    for file in sorted(glob.glob("test_positions/*")):
+        if file.endswith('.fen') or file.endswith('.epd'):
+            try:
+                with open(file, 'r') as f:
+                    for line in f:
+                        line = line.strip()
+                        if line:
+                            try:
+                                b = chess.Board()
+                                b.set_epd(line)
+                                test_fens.append(b.fen())
+                            except ValueError:
+                                pass
+            except Exception as e:
+                print(f"Failed to load {file}: {e}")
+    test_fen_idx = -1
     
     selected_square = None
 
@@ -451,7 +494,7 @@ def main():
         curr_move_count = len(board.move_stack)
         if curr_move_count != prev_move_count:
             pairs = get_move_pairs(board)
-            scroll_index = max(0, len(pairs) - 20)
+            scroll_index = max(0, len(pairs) - 15)
             prev_move_count = curr_move_count
 
         if not board.is_game_over() and board.turn == chess.BLACK:
@@ -459,6 +502,8 @@ def main():
 
             if bot.method == "sunfish":
                 bot_move = sunfish_bot.find_move(board, depth=4)
+            elif bot.method == "stockfish" and stockfish_bot:
+                bot_move = stockfish_bot.find_move(board, depth=4)
             else:
                 bot_move = bot.find_move(board)
             
@@ -475,6 +520,13 @@ def main():
                 elif event.key == pygame.K_r:
                     board.set_fen(board.starting_fen)
                     selected_square = None
+                elif event.key == pygame.K_t:
+                    if test_fens:
+                        test_fen_idx = (test_fen_idx + 1) % len(test_fens)
+                        board.set_fen(test_fens[test_fen_idx])
+                        board.starting_fen = test_fens[test_fen_idx]
+                        selected_square = None
+                        print(f"Loaded test position: {board.starting_fen}")
                 elif event.key == pygame.K_f:
                     fen = board.fen()
                     print(f"Current FEN: {fen}")
@@ -490,6 +542,11 @@ def main():
                     elif bot.method == "minimax":
                         bot.method = "sunfish"
                     elif bot.method == "sunfish":
+                        if stockfish_bot:
+                            bot.method = "stockfish"
+                        else:
+                            bot.method = "random"
+                    elif bot.method == "stockfish":
                         bot.method = "random"
                     else:
                         bot.method = "minimax_ab"
@@ -535,10 +592,10 @@ def main():
                     scroll_index = max(0, scroll_index - 1)
                 elif event.button == 5: 
                     pairs = get_move_pairs(board)
-                    scroll_index = min(max(0, len(pairs) - 20), scroll_index + 1)
+                    scroll_index = min(max(0, len(pairs) - 15), scroll_index + 1)
 
         pairs = get_move_pairs(board)
-        scroll_index = max(0, min(scroll_index, len(pairs) - 20))
+        scroll_index = max(0, min(scroll_index, len(pairs) - 15))
 
         screen.fill(COLOR_BACKGROUND)
         
@@ -546,13 +603,20 @@ def main():
         draw_legal_highlights(screen, board, selected_square)
         draw_pieces(screen, board)
         draw_captured_pieces(screen, board)
-        active_bot = sunfish_bot if bot.method == "sunfish" else bot
+        if bot.method == "sunfish":
+            active_bot = sunfish_bot
+        elif bot.method == "stockfish" and stockfish_bot:
+            active_bot = stockfish_bot
+        else:
+            active_bot = bot
         draw_status_info(screen, board, scroll_index, bot=active_bot, debug_mode=debug_mode, last_depth=last_depth)
 
         pygame.display.update()
         clock.tick(60)
 
     sunfish_bot.quit()
+    if stockfish_bot:
+        stockfish_bot.quit()
     pygame.quit()
     sys.exit()
 
